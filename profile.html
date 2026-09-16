@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Личный кабинет — Gachimuchenik</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="site-header"></div>
+<main class="container">
+  <h1>Личный кабинет</h1>
+
+  <div class="panel">
+    <h2>Профиль</h2>
+    <div class="form-row"><label>Email</label><input id="pEmail" disabled></div>
+    <div class="form-row"><label>Имя</label><input id="pName" maxlength="80"></div>
+    <div class="form-row"><label>Телефон</label><input id="pPhone" maxlength="30"></div>
+    <div class="form-row"><label>Telegram / Discord</label><input id="pContact" maxlength="80"></div>
+    <button class="btn-primary" id="saveProfile">Сохранить</button>
+  </div>
+
+  <div class="panel">
+    <h2>Мои заказы <small style="color:var(--muted);font-size:.85rem">(real-time)</small></h2>
+    <div id="orders"><div class="status">Загрузка…</div></div>
+  </div>
+
+  <div class="panel">
+    <h2>Мои отзывы</h2>
+    <div id="myReviews"><div class="status">Загрузка…</div></div>
+  </div>
+</main>
+<footer>© <span id="year"></span> Gachimuchenik</footer>
+
+<script type="module">
+import { db, state, onUser, mountHeader, esc, fmtPrice, fmtDate, toast } from './js/app.js';
+import {
+  doc, updateDoc, serverTimestamp, collectionGroup, query, where,
+  onSnapshot, deleteDoc
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+mountHeader('profile.html');
+const $ = s => document.querySelector(s);
+
+const STATUS = { new:'Новый', processing:'В обработке', paid:'Оплачен', done:'Выполнен', canceled:'Отменён' };
+
+onUser((user, profile) => {
+  if (!user) { location.href = 'login.html'; return; }
+  $('#pEmail').value   = user.email;
+  $('#pName').value    = profile?.displayName || '';
+  $('#pPhone').value   = profile?.phone || '';
+  $('#pContact').value = profile?.contact || '';
+
+  // Заказы: collectionGroup('orders') фильтр по userId
+  onSnapshot(
+    query(collectionGroup(db,'orders'), where('userId','==',user.uid)),
+    snap => {
+      const list = snap.docs.map(d => ({
+        _id: d.id, _path: d.ref.path, _gameId: d.ref.parent.parent.id, ...d.data()
+      })).sort((a,b) => (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0));
+
+      const w = $('#orders');
+      if (!list.length) { w.innerHTML = '<div class="status">Заказов пока нет</div>'; return; }
+      w.innerHTML = list.map(o => `
+        <div class="review">
+          <div class="review__head">
+            <span class="review__author">Заказ ${esc(o._id.slice(0,8))} · ${esc(o._gameId)}</span>
+            <span>${fmtDate(o.createdAt)}</span>
+          </div>
+          <div style="margin-bottom:8px">
+            ${(o.items||[]).map(i => `<div>${esc(i.name)} × ${i.qty} — ${fmtPrice(i.price*i.qty, i.currency)}</div>`).join('')}
+          </div>
+          <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+            <span>Статус: <span class="status-badge status-${esc(o.status)}">${STATUS[o.status]||o.status}</span></span>
+            <b>${fmtPrice(o.total, o.currency)}</b>
+          </div>
+        </div>`).join('');
+    }
+  );
+
+  // Отзывы: collectionGroup('reviews') фильтр по userId
+  onSnapshot(
+    query(collectionGroup(db,'reviews'), where('userId','==',user.uid)),
+    snap => {
+      const list = snap.docs.map(d => ({
+        _id: d.id, _path: d.ref.path, _uid: d.ref.parent.parent.id, ...d.data()
+      })).sort((a,b) => (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0));
+
+      const w = $('#myReviews');
+      if (!list.length) { w.innerHTML = '<div class="status">Отзывов пока нет</div>'; return; }
+      w.innerHTML = list.map(r => `
+        <div class="review">
+          <div class="review__head">
+            <span class="review__author">Товар: ${esc(r.productId)}</span>
+            <span>${fmtDate(r.createdAt)}</span>
+          </div>
+          <div class="review__stars">${'★'.repeat(r.rating||0)}</div>
+          <p>${esc(r.text)}</p>
+          <button class="btn-danger" data-uid="${esc(r._uid)}" data-id="${esc(r._id)}">Удалить</button>
+        </div>`).join('');
+      w.querySelectorAll('button[data-id]').forEach(b => b.onclick = async () => {
+        if (!confirm('Удалить отзыв?')) return;
+        await deleteDoc(doc(db, 'users', b.dataset.uid, 'reviews', b.dataset.id));
+        toast('Удалено','ok');
+      });
+    }
+  );
+});
+
+$('#saveProfile').onclick = async () => {
+  if (!state.user) return;
+  await updateDoc(doc(db,'users', state.user.uid), {
+    displayName: $('#pName').value.trim(),
+    phone: $('#pPhone').value.trim(),
+    contact: $('#pContact').value.trim(),
+    updatedAt: serverTimestamp()
+  });
+  toast('Профиль сохранён','ok');
+};
+</script>
+</body>
+</html>

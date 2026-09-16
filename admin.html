@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Админ-панель — Gachimuchenik</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="site-header"></div>
+<main class="container">
+  <h1>Админ-панель</h1>
+  <div class="toolbar" id="tabs">
+    <button class="game-tab active" data-tab="products">Товары</button>
+    <button class="game-tab" data-tab="games">Игры</button>
+    <button class="game-tab" data-tab="orders">Заказы</button>
+    <button class="game-tab" data-tab="users">Пользователи</button>
+    <button class="game-tab" data-tab="reviews">Отзывы</button>
+    <button class="game-tab" data-tab="stats">Статистика</button>
+  </div>
+
+  <div id="tab-products" class="tab-panel">
+    <div class="panel">
+      <h3 id="pTitle">Добавить товар</h3>
+      <form id="productForm">
+        <input type="hidden" name="editId">
+        <div class="form-row"><label>ID (латиница, ключ документа)</label><input name="id" required></div>
+        <div class="form-row"><label>Название</label><input name="name" required></div>
+        <div class="form-row"><label>gameId (из коллекции games)</label><input name="gameId" required></div>
+        <div class="form-row"><label>Цена</label><input name="price" type="number" required></div>
+        <div class="form-row"><label>Валюта</label><input name="currency" value="KZT"></div>
+        <div class="form-row"><label>amount</label><input name="amount" type="number"></div>
+        <div class="form-row"><label>bonus</label><input name="bonus" type="number" value="0"></div>
+        <div class="form-row"><label>sortOrder</label><input name="sortOrder" type="number" value="0"></div>
+        <div class="form-row"><label>Описание (опц.)</label><textarea name="description"></textarea></div>
+        <div class="form-row"><label><input type="checkbox" name="isActive" checked> Активен</label></div>
+        <button class="btn-primary" type="submit">Сохранить</button>
+        <button class="btn-ghost" type="button" id="resetForm">Очистить</button>
+      </form>
+    </div>
+    <div class="panel"><h3>Список товаров</h3><div id="productsList"></div></div>
+  </div>
+
+  <div id="tab-games" class="tab-panel" hidden>
+    <div class="panel">
+      <h3 id="gTitle">Добавить игру</h3>
+      <form id="gameForm">
+        <input type="hidden" name="editId">
+        <div class="form-row"><label>ID (slug)</label><input name="id" required></div>
+        <div class="form-row"><label>Название</label><input name="name" required></div>
+        <div class="form-row"><label>Slug</label><input name="slug" required></div>
+        <div class="form-row"><label>Внутриигровая валюта</label><input name="currency" required></div>
+        <div class="form-row"><label><input type="checkbox" name="isActive" checked> Активна</label></div>
+        <button class="btn-primary" type="submit">Сохранить</button>
+        <button class="btn-ghost" type="button" id="resetGameForm">Очистить</button>
+      </form>
+    </div>
+    <div class="panel"><h3>Список игр</h3><div id="gamesList"></div></div>
+  </div>
+
+  <div id="tab-orders"  class="tab-panel" hidden><div class="panel"><h3>Все заказы</h3><div id="ordersList"></div></div></div>
+  <div id="tab-users"   class="tab-panel" hidden><div class="panel"><h3>Пользователи</h3><div id="usersList"></div></div></div>
+  <div id="tab-reviews" class="tab-panel" hidden><div class="panel"><h3>Все отзывы</h3><div id="reviewsList"></div></div></div>
+  <div id="tab-stats"   class="tab-panel" hidden><div class="panel"><h3>Статистика</h3><div id="stats"></div></div></div>
+</main>
+<footer>© <span id="year"></span> Gachimuchenik</footer>
+
+<script type="module">
+import { db, state, onUser, mountHeader, isAdmin, esc, fmtPrice, fmtDate, toast } from './js/app.js';
+import {
+  collection, collectionGroup, doc, setDoc, updateDoc, deleteDoc, onSnapshot, serverTimestamp
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+mountHeader('admin.html');
+const $ = s => document.querySelector(s);
+
+let products = [], games = [], orders = [], users = [], reviews = [];
+
+onUser((user) => {
+  if (!user) { location.href = 'login.html'; return; }
+  if (!isAdmin()) {
+    document.querySelector('main').innerHTML =
+      '<div class="status error">Доступ запрещён. Требуется роль admin.</div>';
+    return;
+  }
+  loadAll();
+});
+
+function loadAll() {
+  onSnapshot(collection(db,'products'), s => {
+    products = s.docs.map(d => ({_id:d.id, ...d.data()}))
+      .sort((a,b) => (a.sortOrder||0) - (b.sortOrder||0));
+    renderProducts(); renderStats();
+  });
+  onSnapshot(collection(db,'games'), s => {
+    games = s.docs.map(d => ({_id:d.id, ...d.data()}))
+      .sort((a,b) => (a.name||'').localeCompare(b.name||''));
+    renderGamesList(); renderStats();
+  });
+  onSnapshot(collectionGroup(db,'orders'), s => {
+    orders = s.docs.map(d => ({
+      _id: d.id, _path: d.ref.path, _gameId: d.ref.parent.parent.id, ...d.data()
+    })).sort((a,b) => (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0));
+    renderOrders(); renderStats();
+  });
+  onSnapshot(collection(db,'users'), s => {
+    users = s.docs.map(d => ({_id:d.id, ...d.data()}));
+    renderUsers(); renderStats();
+  });
+  onSnapshot(collectionGroup(db,'reviews'), s => {
+    reviews = s.docs.map(d => ({
+      _id: d.id, _path: d.ref.path, _uid: d.ref.parent.parent.id, ...d.data()
+    }));
+    renderReviews(); renderStats();
+  });
+}
+
+$('#tabs').addEventListener('click', e => {
+  const b = e.target.closest('.game-tab'); if (!b) return;
+  document.querySelectorAll('#tabs .game-tab').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  document.querySelectorAll('.tab-panel').forEach(p => p.hidden = true);
+  document.getElementById('tab-' + b.dataset.tab).hidden = false;
+});
+
+/* ---------- Products ---------- */
+function renderProducts() {
+  if (!products.length) { $('#productsList').innerHTML = '<div class="status">Пусто</div>'; return; }
+  $('#productsList').innerHTML = `
+    <table class="table">
+      <thead><tr><th>ID</th><th>Название</th><th>Игра</th><th>Цена</th><th>Активен</th><th></th></tr></thead>
+      <tbody>${products.map(p => `
+        <tr>
+          <td>${esc(p.id||p._id)}</td><td>${esc(p.name)}</td><td>${esc(p.gameId||'')}</td>
+          <td>${fmtPrice(p.price, p.currency)}</td>
+          <td>${p.isActive === false ? 'нет' : 'да'}</td>
+          <td class="actions">
+            <button class="btn-ghost" data-act="edit" data-id="${esc(p._id)}">Изм.</button>
+            <button class="btn-danger" data-act="del" data-id="${esc(p._id)}">Удал.</button>
+          </td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+  $('#productsList').querySelectorAll('button').forEach(b => {
+    const p = products.find(x => x._id === b.dataset.id);
+    if (b.dataset.act === 'edit') b.onclick = () => fillProductForm(p);
+    if (b.dataset.act === 'del')  b.onclick = async () => {
+      if (!confirm('Удалить ' + p.name + '?')) return;
+      await deleteDoc(doc(db,'products', p._id));
+      toast('Удалено','ok');
+    };
+  });
+}
+
+function fillProductForm(p) {
+  const f = $('#productForm');
+  f.editId.value    = p._id;
+  f.id.value        = p.id || p._id;
+  f.name.value      = p.name || '';
+  f.gameId.value    = p.gameId || '';
+  f.price.value     = p.price || 0;
+  f.currency.value  = p.currency || 'KZT';
+  f.amount.value    = p.amount ?? '';
+  f.bonus.value     = p.bonus || 0;
+  f.sortOrder.value = p.sortOrder || 0;
+  f.description.value = p.description || '';
+  f.isActive.checked = p.isActive !== false;
+  $('#pTitle').textContent = 'Редактирование: ' + p.name;
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+$('#resetForm').onclick = () => {
+  $('#productForm').reset();
+  $('#productForm').editId.value = '';
+  $('#pTitle').textContent = 'Добавить товар';
+};
+
+$('#productForm').onsubmit = async e => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const data = {
+    id: (fd.get('id')||'').trim(),
+    name: (fd.get('name')||'').trim(),
+    gameId: (fd.get('gameId')||'').trim(),
+    price: Number(fd.get('price')) || 0,
+    currency: (fd.get('currency')||'KZT').trim(),
+    amount: fd.get('amount') ? Number(fd.get('amount')) : null,
+    bonus: Number(fd.get('bonus')) || 0,
+    sortOrder: Number(fd.get('sortOrder')) || 0,
+    description: (fd.get('description')||'').trim(),
+    isActive: !!fd.get('isActive'),
+    updatedAt: serverTimestamp()
+  };
+  const editId = fd.get('editId');
+  try {
+    if (editId) {
+      await updateDoc(doc(db,'products', editId), data);
+      toast('Обновлено','ok');
+    } else {
+      await setDoc(doc(db,'products', data.id), { ...data, createdAt: serverTimestamp() });
+      toast('Добавлено','ok');
+    }
+    $('#resetForm').click();
+  } catch (err) { toast('Ошибка: ' + err.message,'err'); }
+};
+
+/* ---------- Games ---------- */
+function renderGamesList() {
+  if (!games.length) { $('#gamesList').innerHTML = '<div class="status">Пусто</div>'; return; }
+  $('#gamesList').innerHTML = `
+    <table class="table">
+      <thead><tr><th>ID</th><th>Название</th><th>Валюта</th><th>Активна</th><th></th></tr></thead>
+      <tbody>${games.map(g => `
+        <tr>
+          <td>${esc(g.id||g._id)}</td><td>${esc(g.name)}</td><td>${esc(g.currency||'')}</td>
+          <td>${g.isActive === false ? 'нет' : 'да'}</td>
+          <td class="actions">
+            <button class="btn-ghost" data-act="edit" data-id="${esc(g._id)}">Изм.</button>
+            <button class="btn-danger" data-act="del" data-id="${esc(g._id)}">Удал.</button>
+          </td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+  $('#gamesList').querySelectorAll('button').forEach(b => {
+    const g = games.find(x => x._id === b.dataset.id);
+    if (b.dataset.act === 'edit') b.onclick = () => {
+      const f = $('#gameForm');
+      f.editId.value = g._id;
+      f.id.value = g.id || g._id;
+      f.name.value = g.name || '';
+      f.slug.value = g.slug || '';
+      f.currency.value = g.currency || '';
+      f.isActive.checked = g.isActive !== false;
+      $('#gTitle').textContent = 'Редактирование: ' + g.name;
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+    if (b.dataset.act === 'del') b.onclick = async () => {
+      if (!confirm('Удалить игру ' + g.name + '? Товары и заказы внутри останутся.') ) return;
+      await deleteDoc(doc(db,'games', g._id));
+      toast('Удалено','ok');
+    };
+  });
+}
+
+$('#resetGameForm').onclick = () => {
+  $('#gameForm').reset();
+  $('#gameForm').editId.value = '';
+  $('#gTitle').textContent = 'Добавить игру';
+};
+
+$('#gameForm').onsubmit = async e => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const data = {
+    id: (fd.get('id')||'').trim(),
+    name: (fd.get('name')||'').trim(),
+    slug: (fd.get('slug')||'').trim(),
+    currency: (fd.get('currency')||'').trim(),
+    isActive: !!fd.get('isActive'),
+    updatedAt: serverTimestamp()
+  };
+  const editId = fd.get('editId');
+  try {
+    if (editId) { await updateDoc(doc(db,'games', editId), data); toast('Обновлено','ok'); }
+    else { await setDoc(doc(db,'games', data.id), { ...data, createdAt: serverTimestamp() }); toast('Добавлено','ok'); }
+    $('#resetGameForm').click();
+  } catch (err) { toast('Ошибка: ' + err.message,'err'); }
+};
+
+/* ---------- Orders ---------- */
+const STATUS = { new:'Новый', processing:'В обработке', paid:'Оплачен', done:'Выполнен', canceled:'Отменён' };
+
+function renderOrders() {
+  if (!orders.length) { $('#ordersList').innerHTML = '<div class="status">Пусто</div>'; return; }
+  $('#ordersList').innerHTML = `
+    <table class="table">
+      <thead><tr><th>Дата</th><th>Игра</th><th>Клиент</th><th>Товары</th><th>Сумма</th><th>Статус</th></tr></thead>
+      <tbody>${orders.map(o => `
+        <tr>
+          <td>${fmtDate(o.createdAt)}</td>
+          <td>${esc(o._gameId)}</td>
+          <td>${esc(o.customer?.name||'—')}<br><small style="color:var(--muted)">${esc(o.customer?.contact||'')}</small></td>
+          <td>${(o.items||[]).map(i => esc(i.name)+' × '+i.qty).join('<br>')}</td>
+          <td>${fmtPrice(o.total, o.currency)}</td>
+          <td><select data-path="${esc(o._path)}" class="status-select">
+            ${Object.entries(STATUS).map(([k,v]) => `<option value="${k}" ${o.status===k?'selected':''}>${v}</option>`).join('')}
+          </select></td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+  $('#ordersList').querySelectorAll('.status-select').forEach(s => s.onchange = async () => {
+    await updateDoc(doc(db, s.dataset.path), { status: s.value, updatedAt: serverTimestamp() });
+    toast('Статус обновлён','ok');
+  });
+}
+
+/* ---------- Users ---------- */
+function renderUsers() {
+  if (!users.length) { $('#usersList').innerHTML = '<div class="status">Пусто</div>'; return; }
+  $('#usersList').innerHTML = `
+    <table class="table">
+      <thead><tr><th>Email</th><th>Имя</th><th>Роль</th></tr></thead>
+      <tbody>${users.map(u => `
+        <tr>
+          <td>${esc(u.email||'')}</td>
+          <td>${esc(u.displayName||'')}</td>
+          <td><select data-id="${esc(u._id)}" class="role-select">
+            <option value="user"  ${u.role!=='admin'?'selected':''}>user</option>
+            <option value="admin" ${u.role==='admin'?'selected':''}>admin</option>
+          </select></td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+  $('#usersList').querySelectorAll('.role-select').forEach(s => s.onchange = async () => {
+    await updateDoc(doc(db,'users', s.dataset.id), { role: s.value });
+    toast('Роль изменена','ok');
+  });
+}
+
+/* ---------- Reviews ---------- */
+function renderReviews() {
+  if (!reviews.length) { $('#reviewsList').innerHTML = '<div class="status">Пусто</div>'; return; }
+  $('#reviewsList').innerHTML = reviews.map(r => `
+    <div class="review">
+      <div class="review__head">
+        <span class="review__author">${esc(r.userName||'')}</span>
+        <span>${fmtDate(r.createdAt)} · товар ${esc(r.productId)}</span>
+      </div>
+      <div class="review__stars">${'★'.repeat(r.rating||0)}</div>
+      <p>${esc(r.text)}</p>
+      <button class="btn-danger" data-path="${esc(r._path)}">Удалить</button>
+    </div>`).join('');
+  $('#reviewsList').querySelectorAll('button[data-path]').forEach(b => b.onclick = async () => {
+    if (!confirm('Удалить отзыв?')) return;
+    await deleteDoc(doc(db, b.dataset.path));
+    toast('Удалено','ok');
+  });
+}
+
+/* ---------- Stats ---------- */
+function renderStats() {
+  const totalSum = orders.reduce((s,o) => s + (o.total||0), 0);
+  $('#stats').innerHTML = `
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr))">
+      <div class="panel" style="text-align:center;margin:0"><div style="font-size:2rem;font-weight:800">${games.length}</div><div style="color:var(--muted)">игр</div></div>
+      <div class="panel" style="text-align:center;margin:0"><div style="font-size:2rem;font-weight:800">${products.length}</div><div style="color:var(--muted)">товаров</div></div>
+      <div class="panel" style="text-align:center;margin:0"><div style="font-size:2rem;font-weight:800">${orders.length}</div><div style="color:var(--muted)">заказов</div></div>
+      <div class="panel" style="text-align:center;margin:0"><div style="font-size:2rem;font-weight:800">${users.length}</div><div style="color:var(--muted)">пользователей</div></div>
+      <div class="panel" style="text-align:center;margin:0"><div style="font-size:2rem;font-weight:800">${reviews.length}</div><div style="color:var(--muted)">отзывов</div></div>
+      <div class="panel" style="text-align:center;margin:0"><div style="font-size:2rem;font-weight:800">${totalSum.toLocaleString('ru-RU')}</div><div style="color:var(--muted)">KZT сумма</div></div>
+    </div>`;
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Вход — Gachimuchenik</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="site-header"></div>
+<main class="container" style="max-width:460px">
+  <div class="panel">
+    <div class="toolbar" style="gap:6px;margin-bottom:18px">
+      <button class="game-tab active" data-tab="login">Вход</button>
+      <button class="game-tab" data-tab="register">Регистрация</button>
+      <button class="game-tab" data-tab="reset">Сброс пароля</button>
+    </div>
+
+    <form id="loginForm">
+      <div class="form-row"><label>Email</label><input name="email" type="email" required></div>
+      <div class="form-row"><label>Пароль</label><input name="password" type="password" required minlength="6"></div>
+      <button class="btn-primary" type="submit" style="width:100%;justify-content:center">Войти</button>
+    </form>
+
+    <form id="registerForm" hidden>
+      <div class="form-row"><label>Имя</label><input name="displayName" required maxlength="80"></div>
+      <div class="form-row"><label>Email</label><input name="email" type="email" required></div>
+      <div class="form-row"><label>Пароль (мин. 6)</label><input name="password" type="password" required minlength="6"></div>
+      <button class="btn-primary" type="submit" style="width:100%;justify-content:center">Создать аккаунт</button>
+    </form>
+
+    <form id="resetForm" hidden>
+      <div class="form-row"><label>Email</label><input name="email" type="email" required></div>
+      <button class="btn-primary" type="submit" style="width:100%;justify-content:center">Отправить ссылку</button>
+    </form>
+  </div>
+</main>
+<footer>© <span id="year"></span> Gachimuchenik</footer>
+
+<script type="module">
+import { login, register, resetPassword, toast, onUser, mountHeader } from './js/app.js';
+mountHeader('');
+
+onUser(u => { if (u) location.href = 'index.html'; });
+
+document.querySelectorAll('.game-tab').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.game-tab').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  ['login','register','reset'].forEach(t => {
+    document.getElementById(t+'Form').hidden = t !== b.dataset.tab;
+  });
+});
+
+document.getElementById('loginForm').onsubmit = async e => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  try { await login(fd.get('email'), fd.get('password')); location.href = 'index.html'; }
+  catch (err) { toast(friendly(err), 'err'); }
+};
+document.getElementById('registerForm').onsubmit = async e => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  try { await register(fd.get('email'), fd.get('password'), fd.get('displayName')); location.href = 'index.html'; }
+  catch (err) { toast(friendly(err), 'err'); }
+};
+document.getElementById('resetForm').onsubmit = async e => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  try { await resetPassword(fd.get('email')); toast('Письмо отправлено', 'ok'); }
+  catch (err) { toast(friendly(err), 'err'); }
+};
+function friendly(e) {
+  const m = (e.code || e.message || '').toString();
+  if (m.includes('email-already-in-use')) return 'Этот email уже занят';
+  if (m.includes('invalid-credential') || m.includes('wrong-password')) return 'Неверный email или пароль';
+  if (m.includes('user-not-found')) return 'Пользователь не найден';
+  if (m.includes('weak-password')) return 'Слабый пароль';
+  return e.message;
+}
+</script>
+</body>
+</html>

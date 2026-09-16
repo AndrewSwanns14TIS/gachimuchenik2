@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Корзина — Gachimuchenik</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="site-header"></div>
+<main class="container">
+  <h1>Корзина</h1>
+  <div id="cartItems"></div>
+  <div id="summary" hidden>
+    <div class="cart-total"><span>Итого:</span><span id="total">0 KZT</span></div>
+    <button class="btn-primary" id="checkoutBtn" style="width:100%;justify-content:center">Оформить заказ</button>
+  </div>
+  <div id="empty" class="status">Корзина пуста</div>
+</main>
+<footer>© <span id="year"></span> Gachimuchenik</footer>
+
+<div class="modal-back" id="checkoutModal" hidden>
+  <form class="panel" id="checkoutForm" style="max-width:480px;margin:40px auto">
+    <h2>Оформление заказа</h2>
+    <div class="form-row"><label>Имя</label><input name="name" required maxlength="80"></div>
+    <div class="form-row"><label>Email</label><input name="email" type="email" required></div>
+    <div class="form-row"><label>Контакт (Telegram/Discord)</label><input name="contact" required maxlength="80"></div>
+    <div class="form-row"><label>Комментарий</label><textarea name="comment" maxlength="500"></textarea></div>
+    <div style="display:flex;gap:10px">
+      <button type="button" class="btn-ghost" id="cancel" style="flex:1;justify-content:center">Отмена</button>
+      <button type="submit" class="btn-primary" style="flex:1;justify-content:center">Отправить</button>
+    </div>
+  </form>
+</div>
+
+<script type="module">
+import { db, state, onUser, mountHeader, esc, fmtPrice, toast, setCart } from './js/app.js';
+import {
+  doc, onSnapshot, collection, getDocs, query, where,
+  writeBatch, serverTimestamp
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+mountHeader('cart.html');
+const $ = s => document.querySelector(s);
+let cartItems = [];
+const productMap = new Map();
+
+onUser(async user => {
+  if (!user) { location.href = 'login.html'; return; }
+  const ps = await getDocs(query(collection(db,'products'), where('isActive','==',true)));
+  ps.forEach(d => productMap.set(d.id, {_id:d.id, ...d.data()}));
+  render();
+
+  // Слушаем users/{uid}/carts/active
+  onSnapshot(doc(db, 'users', user.uid, 'carts', 'active'), snap => {
+    cartItems = snap.exists() ? (snap.data().items || []) : [];
+    render();
+  });
+});
+
+function render() {
+  const w = $('#cartItems');
+  if (!cartItems.length) {
+    w.innerHTML = '';
+    $('#summary').hidden = true;
+    $('#empty').hidden = false;
+    return;
+  }
+  $('#empty').hidden = true;
+  $('#summary').hidden = false;
+  let total = 0;
+  w.innerHTML = cartItems.map(i => {
+    const p = productMap.get(i.id);
+    if (!p) return '';
+    total += Number(p.price) * i.qty;
+    return `
+      <div class="cart-row" data-id="${esc(i.id)}">
+        <div><b>${esc(p.name)}</b><div style="color:var(--muted);font-size:.85rem">${fmtPrice(p.price, p.currency)}</div></div>
+        <div class="cart-row__qty">
+          <button data-act="dec">−</button><span>${i.qty}</span><button data-act="inc">+</button>
+        </div>
+        <div>${fmtPrice(p.price * i.qty, p.currency)}</div>
+        <button class="btn-danger" data-act="rm">✕</button>
+      </div>`;
+  }).join('');
+  $('#total').textContent = fmtPrice(total, 'KZT');
+  w.querySelectorAll('.cart-row').forEach(row => {
+    const id = row.dataset.id;
+    row.querySelectorAll('[data-act]').forEach(b => b.onclick = () => {
+      const item = cartItems.find(x => x.id === id);
+      if (b.dataset.act === 'inc') item.qty++;
+      else if (b.dataset.act === 'dec') item.qty = Math.max(1, item.qty - 1);
+      else if (b.dataset.act === 'rm') cartItems = cartItems.filter(x => x.id !== id);
+      setCart(cartItems);
+    });
+  });
+}
+
+$('#checkoutBtn').onclick = () => { $('#checkoutModal').hidden = false; };
+$('#cancel').onclick = () => { $('#checkoutModal').hidden = true; };
+$('#checkoutModal').onclick = e => { if (e.target.id === 'checkoutModal') e.currentTarget.hidden = true; };
+
+/* ====== Оформление: заказы уходят в games/{gameId}/orders ====== */
+$('#checkoutForm').onsubmit = async e => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const customer = {
+    name:    (fd.get('name')||'').trim(),
+    email:   (fd.get('email')||'').trim(),
+    contact: (fd.get('contact')||'').trim(),
+    comment: (fd.get('comment')||'').trim()
+  };
+
+  const items = cartItems.map(i => {
+    const p = productMap.get(i.id);
+    return {
+      id: p.id, name: p.name, price: Number(p.price),
+      qty: i.qty, gameId: p.gameId, currency: p.currency || 'KZT'
+    };
+  });
+
+  // Группируем по игре — на каждую игру отдельный заказ в её подколлекции
+  const byGame = {};
+  items.forEach(i => (byGame[i.gameId] ||= []).push(i));
+
+  const batch = writeBatch(db);
+  const createdIds = [];
+
+  for (const [gameId, gameItems] of Object.entries(byGame)) {
+    const ref = doc(collection(db, 'games', gameId, 'orders'));
+    const total = gameItems.reduce((s,i) => s + i.price * i.qty, 0);
+    batch.set(ref, {
+      userId: state.user.uid,
+      customer,
+      items: gameItems,
+      total,
+      currency: 'KZT',
+      gameId,
+      status: 'new',
+      createdAt: serverTimestamp()
+    });
+    createdIds.push(ref.id);
+  }
+
+  const btn = e.target.querySelector('button[type=submit]');
+  btn.disabled = true;
+  try {
+    await batch.commit();
+    await setCart([]);
+    $('#checkoutModal').hidden = true;
+    toast('Заказ оформлен! № ' + createdIds.map(x => x.slice(0,8)).join(', '), 'ok');
+  } catch (err) {
+    toast('Ошибка: ' + err.message, 'err');
+  } finally { btn.disabled = false; }
+};
+</script>
+</body>
+</html>

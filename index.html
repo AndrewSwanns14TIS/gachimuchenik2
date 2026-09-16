@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gachimuchenik — каталог</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="site-header"></div>
+<main class="container">
+  <h1>Каталог донат-валюты</h1>
+  <div class="games-list" id="games"></div>
+  <div class="toolbar">
+    <input type="text" id="search" placeholder="Поиск по названию…">
+    <select id="sort">
+      <option value="sortOrder">По порядку</option>
+      <option value="price-asc">Цена ↑</option>
+      <option value="price-desc">Цена ↓</option>
+      <option value="name">Название A-Z</option>
+    </select>
+  </div>
+  <div id="loading" class="status">Загрузка…</div>
+  <div id="products" class="grid"></div>
+  <button class="load-more" id="loadMore" hidden>Показать ещё</button>
+</main>
+<footer>© <span id="year"></span> Gachimuchenik · Firebase</footer>
+
+<script type="module">
+import { db, state, mountHeader, esc, fmtPrice, toast, getCart, setCart } from './js/app.js';
+import { collection, query, where, onSnapshot }
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+mountHeader('index.html');
+const $ = s => document.querySelector(s);
+
+let games = [], products = [], currentGame = '', filtered = [], shown = 0;
+const PAGE = 12;
+
+onSnapshot(query(collection(db,'games'), where('isActive','==',true)), snap => {
+  games = snap.docs.map(d => ({_id:d.id, ...d.data()}))
+    .sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  renderGames();
+});
+
+onSnapshot(query(collection(db,'products'), where('isActive','==',true)), snap => {
+  products = snap.docs.map(d => ({_id:d.id, ...d.data()}));
+  $('#loading').hidden = true;
+  applyFilters();
+}, err => {
+  $('#loading').textContent = 'Ошибка: ' + err.message;
+  $('#loading').classList.add('error');
+});
+
+function renderGames() {
+  const w = $('#games');
+  w.innerHTML = `<button class="game-tab ${currentGame===''?'active':''}" data-id="">Все игры</button>`
+    + games.map(g => `<button class="game-tab ${currentGame===g.id?'active':''}" data-id="${esc(g.id)}">${esc(g.name)}</button>`).join('');
+  w.querySelectorAll('.game-tab').forEach(b => b.onclick = () => {
+    currentGame = b.dataset.id; renderGames(); applyFilters();
+  });
+}
+
+function applyFilters() {
+  const term = $('#search').value.trim().toLowerCase();
+  const sort = $('#sort').value;
+  filtered = products.filter(p => {
+    if (currentGame && p.gameId !== currentGame) return false;
+    if (term && !(p.name||'').toLowerCase().includes(term)) return false;
+    return true;
+  });
+  if (sort === 'price-asc')       filtered.sort((a,b)=>a.price-b.price);
+  else if (sort === 'price-desc') filtered.sort((a,b)=>b.price-a.price);
+  else if (sort === 'name')       filtered.sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  else filtered.sort((a,b)=>(a.sortOrder||0)-(b.sortOrder||0) || (a.price||0)-(b.price||0));
+  shown = 0;
+  renderProducts(true);
+}
+
+function renderProducts(reset) {
+  const w = $('#products');
+  if (reset) w.innerHTML = '';
+  const next = filtered.slice(shown, shown + PAGE);
+  next.forEach(p => {
+    const g = games.find(x => x.id === p.gameId);
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `
+      <div class="card__name"><a href="product.html?id=${encodeURIComponent(p.id)}">${esc(p.name)}</a></div>
+      <div class="card__meta">${esc(g?.name||'')}${p.bonus ? ' · 🎁 +'+esc(p.bonus) : ''}</div>
+      <div class="card__price">${fmtPrice(p.price, p.currency)}</div>
+      <div class="card__actions">
+        <button class="btn-primary" data-act="add" style="flex:1">В корзину</button>
+        <a class="btn-ghost" href="product.html?id=${encodeURIComponent(p.id)}">Детали</a>
+      </div>`;
+    card.querySelector('[data-act=add]').onclick = () => addToCart(p.id);
+    w.appendChild(card);
+  });
+  shown += next.length;
+  $('#loadMore').hidden = shown >= filtered.length;
+  if (!filtered.length && reset) w.innerHTML = '<div class="status">Ничего не найдено</div>';
+}
+
+async function addToCart(pid) {
+  if (!state.user) { location.href = 'login.html'; return; }
+  const items = await getCart();
+  const f = items.find(i => i.id === pid);
+  if (f) f.qty++; else items.push({ id: pid, qty: 1 });
+  await setCart(items);
+  toast('Добавлено в корзину', 'ok');
+}
+
+$('#loadMore').onclick = () => renderProducts(false);
+$('#search').addEventListener('input', applyFilters);
+$('#sort').addEventListener('change', applyFilters);
+</script>
+</body>
+</html>

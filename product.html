@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Товар — Gachimuchenik</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="site-header"></div>
+<main class="container">
+  <div id="content"><div class="status">Загрузка…</div></div>
+
+  <section class="reviews" id="reviews-wrap" hidden>
+    <h2>Отзывы</h2>
+    <div id="reviews-list"></div>
+    <div class="panel" id="review-form-wrap" hidden style="margin-top:16px">
+      <h3>Оставить отзыв</h3>
+      <div class="form-row">
+        <label>Оценка</label>
+        <select id="rRating">
+          <option value="5">★★★★★</option><option value="4">★★★★</option>
+          <option value="3">★★★</option><option value="2">★★</option><option value="1">★</option>
+        </select>
+      </div>
+      <div class="form-row"><label>Текст</label><textarea id="rText" maxlength="500"></textarea></div>
+      <button class="btn-primary" id="rSubmit">Отправить отзыв</button>
+    </div>
+  </section>
+
+  <section style="margin-top:40px">
+    <h2>Похожие товары</h2>
+    <div class="grid" id="related"></div>
+  </section>
+</main>
+<footer>© <span id="year"></span> Gachimuchenik</footer>
+
+<script type="module">
+import { db, state, onUser, mountHeader, esc, fmtPrice, toast, fmtDate, getCart, setCart } from './js/app.js';
+import {
+  doc, getDoc, onSnapshot, collection, collectionGroup, query, where,
+  addDoc, deleteDoc, updateDoc, serverTimestamp, limit
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+mountHeader('index.html');
+const $ = s => document.querySelector(s);
+const pid = new URLSearchParams(location.search).get('id');
+let current = null;
+
+if (!pid) {
+  $('#content').innerHTML = '<div class="status error">Товар не указан</div>';
+} else {
+  onSnapshot(doc(db,'products', pid), async snap => {
+    if (!snap.exists()) {
+      $('#content').innerHTML = '<div class="status error">Товар не найден</div>';
+      return;
+    }
+    current = { _id: snap.id, ...snap.data() };
+    let gameName = '';
+    if (current.gameId) {
+      const g = await getDoc(doc(db,'games', current.gameId));
+      if (g.exists()) gameName = g.data().name;
+    }
+    renderProduct(current, gameName);
+    loadRelated(current);
+    loadReviews(current.id);
+  });
+}
+
+function renderProduct(p, gameName) {
+  $('#content').innerHTML = `
+    <a href="index.html" style="color:var(--muted)">← Назад в каталог</a>
+    <div class="detail" style="margin-top:16px">
+      <div class="detail__info">
+        <h1>${esc(p.name)}</h1>
+        <div class="detail__meta">${esc(gameName)}${p.bonus ? ' · 🎁 +'+esc(p.bonus) : ''}</div>
+        <div class="detail__price">${fmtPrice(p.price, p.currency)}</div>
+        ${p.amount ? `<div class="detail__meta">Количество: ${esc(p.amount)}</div>` : ''}
+        <div class="detail__actions"><button class="btn-primary" id="addBtn">В корзину</button></div>
+      </div>
+      <div class="detail__info">
+        <h3>Описание</h3>
+        <p>${esc(p.description || ('Донат-валюта для игры ' + (gameName||'') + '. Моментальная доставка.'))}</p>
+      </div>
+    </div>`;
+  $('#addBtn').onclick = () => addToCart(p.id);
+  $('#reviews-wrap').hidden = false;
+  $('#review-form-wrap').hidden = !state.user;
+}
+
+async function addToCart(productId) {
+  if (!state.user) { location.href = 'login.html'; return; }
+  const items = await getCart();
+  const f = items.find(i => i.id === productId);
+  if (f) f.qty++; else items.push({ id: productId, qty: 1 });
+  await setCart(items);
+  toast('Добавлено в корзину', 'ok');
+}
+
+onUser(() => {
+  if ($('#review-form-wrap')) $('#review-form-wrap').hidden = !state.user;
+});
+
+/* ====== Отзывы: users/{uid}/reviews через collectionGroup ====== */
+function loadReviews(productId) {
+  onSnapshot(
+    query(collectionGroup(db,'reviews'), where('productId','==',productId)),
+    snap => {
+      const list = snap.docs.map(d => ({
+        _id: d.id, _path: d.ref.path, _uid: d.ref.parent.parent.id, ...d.data()
+      })).sort((a,b) => (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0));
+
+      const w = $('#reviews-list');
+      if (!list.length) { w.innerHTML = '<div class="status">Отзывов пока нет</div>'; return; }
+
+      w.innerHTML = list.map(r => {
+        const mine = state.user && r.userId === state.user.uid;
+        return `
+          <div class="review" data-id="${esc(r._id)}" data-uid="${esc(r._uid)}">
+            <div class="review__head">
+              <span class="review__author">${esc(r.userName||'Аноним')}</span>
+              <span>${fmtDate(r.createdAt)}</span>
+            </div>
+            <div class="review__stars">${'★'.repeat(r.rating||0)}${'☆'.repeat(5-(r.rating||0))}</div>
+            <p>${esc(r.text)}</p>
+            ${mine ? `<div class="actions" style="display:flex;gap:6px;margin-top:6px">
+              <button class="btn-ghost" data-act="edit" style="padding:6px 12px;font-size:.82rem">Ред.</button>
+              <button class="btn-danger" data-act="del">Удалить</button>
+            </div>` : ''}
+          </div>`;
+      }).join('');
+
+      w.querySelectorAll('.review').forEach(el => {
+        const id = el.dataset.id;
+        const uid = el.dataset.uid;
+        const editBtn = el.querySelector('[data-act=edit]');
+        const delBtn  = el.querySelector('[data-act=del]');
+        if (editBtn) editBtn.onclick = async () => {
+          const r = list.find(x => x._id === id);
+          const nt = prompt('Новый текст', r.text);
+          if (!nt) return;
+          await updateDoc(doc(db, 'users', uid, 'reviews', id), {
+            text: nt.slice(0,500), updatedAt: serverTimestamp()
+          });
+          toast('Обновлено','ok');
+        };
+        if (delBtn) delBtn.onclick = async () => {
+          if (!confirm('Удалить?')) return;
+          await deleteDoc(doc(db, 'users', uid, 'reviews', id));
+          toast('Удалено','ok');
+        };
+      });
+    }
+  );
+}
+
+$('#rSubmit').onclick = async () => {
+  if (!state.user) return;
+  const text = $('#rText').value.trim();
+  const rating = Number($('#rRating').value);
+  if (text.length < 3) { toast('Слишком короткий отзыв','err'); return; }
+  await addDoc(collection(db, 'users', state.user.uid, 'reviews'), {
+    productId: current.id,
+    userId: state.user.uid,
+    userName: state.profile?.displayName || state.user.email,
+    rating, text,
+    createdAt: serverTimestamp()
+  });
+  $('#rText').value = '';
+  toast('Отзыв добавлен','ok');
+};
+
+/* ====== Похожие ====== */
+function loadRelated(p) {
+  if (!p.gameId) return;
+  onSnapshot(
+    query(collection(db,'products'), where('gameId','==',p.gameId), where('isActive','==',true), limit(6)),
+    snap => {
+      const items = snap.docs.map(d => ({_id:d.id, ...d.data()}))
+        .filter(x => x.id !== p.id).slice(0,4);
+      $('#related').innerHTML = items.length ? items.map(x => `
+        <div class="card">
+          <div class="card__name"><a href="product.html?id=${encodeURIComponent(x.id)}">${esc(x.name)}</a></div>
+          <div class="card__price">${fmtPrice(x.price, x.currency)}</div>
+        </div>`).join('') : '<div class="status">Похожих товаров нет</div>';
+    });
+}
+</script>
+</body>
+</html>
