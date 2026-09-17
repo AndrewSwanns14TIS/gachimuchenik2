@@ -113,3 +113,10 @@ footer{padding:24px 20px;text-align:center;color:var(--muted);font-size:.85rem;b
   .cart-row{grid-template-columns:1fr auto;row-gap:8px}
   .cart-row__qty{grid-column:2}
 }
+
+.pagination{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin-top:28px;align-items:center}
+.page-btn{min-width:40px;height:40px;padding:0 12px;border-radius:10px;background:var(--panel);border:1px solid var(--border);color:var(--text);font-weight:600;font-size:.95rem;transition:.15s}
+.page-btn:hover:not(:disabled):not(.active){border-color:var(--accent);background:var(--panel-2)}
+.page-btn.active{background:linear-gradient(100deg,var(--accent),var(--accent-2));color:#fff;border-color:transparent}
+.page-btn:disabled{opacity:.35;cursor:not-allowed}
+.page-ellipsis{padding:0 6px;color:var(--muted);font-weight:700;user-select:none}
